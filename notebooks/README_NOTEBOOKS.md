@@ -47,6 +47,9 @@ Each notebook follows the 7-cell template:
 - 2nd and 4th moment calculations
 - Hyper-isotropy ratio = 3.0 (exact)
 - Speed of light: c = a₀√(6J/M*)
+  - a₀ = lattice spacing (Planck length scale)
+  - J = elastic shear coupling between nodes
+  - M* = effective nodal mass (inertia)
 
 **Key Results:**
 - ✓ Hyper-isotropy proven (no Lorentz violation)
