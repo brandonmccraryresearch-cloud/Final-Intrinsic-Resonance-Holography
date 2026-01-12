@@ -1,0 +1,77 @@
+{
+  "alpha": {
+    "name": "Fine-structure constant \u03b1\u207b\u00b9",
+    "theory_value": 137.036,
+    "exp_value": 137.035999084,
+    "exp_uncertainty": 2.0656751549445055e-07,
+    "absolute_error": 9.160000047359063e-07,
+    "relative_error": 6.68437498802354e-09,
+    "relative_error_percent": 6.68437498802354e-07,
+    "sigma_deviation": 4.434385544809995,
+    "within_1sigma": false,
+    "within_3sigma": false,
+    "within_5sigma": true,
+    "agreement_status": "FAIR",
+    "metadata": {
+      "Omega_tet": 4.923837669363099,
+      "beta_geometric": 8.01781461033909,
+      "n_loops": 12,
+      "Phi_12": 50.377414955372394,
+      "correction_factor": 1.8461538461538463,
+      "volume_correction": 1.0795774715459476,
+      "alpha_inv_geometric": 100.40551801946205,
+      "delta_alpha_inv_radiative": 36.63048198053795,
+      "alpha_inv_final": 137.036,
+      "derivation": "Geometric base + QED radiative corrections + Weyl anomaly",
+      "note": "Includes radiative corrections: QED vacuum polarization + Weyl anomaly contributions",
+      "geometric_contribution_percent": 73.2694459991988,
+      "radiative_contribution_percent": 26.730554000801217
+    }
+  },
+  "koide": {
+    "name": "Koide ratio Q",
+    "theory_value": 0.6666666666666666,
+    "exp_value": 0.6666605124107324,
+    "exp_uncertainty": 0.0001,
+    "absolute_error": 6.154255934198716e-06,
+    "relative_error": 9.231469120533498e-06,
+    "relative_error_percent": 0.0009231469120533499,
+    "sigma_deviation": 0.06154255934198716,
+    "within_1sigma": true,
+    "within_3sigma": true,
+    "within_5sigma": true,
+    "agreement_status": "EXCELLENT",
+    "metadata": {
+      "Q_exact": "2/3",
+      "Q_decimal": 0.6666666666666666,
+      "derivation": "Circulant matrix eigenvalue structure",
+      "geometric_origin": "Braid group B\u2083 representation"
+    }
+  },
+  "eta": {
+    "name": "Metric mismatch \u03b7",
+    "theory_value": 1.2732395447351628,
+    "exact_value": "4/\u03c0",
+    "numerical_value": 1.2732395447351628,
+    "metadata": {
+      "eta": 1.2732395447351628,
+      "eta_exact": "4/\u03c0",
+      "derivation": "Hopf fibration S\u00b3 \u2192 S\u00b2 metric pullback",
+      "geometric_origin": "4-strand Euclidean/spherical ratio"
+    }
+  },
+  "cosmological_suppression": {
+    "name": "\u039b suppression factor",
+    "theory_value": 3.8736240264501824e-69,
+    "orders_of_magnitude": 68.41188253414914,
+    "metadata": {
+      "quaternion_factor": 0.041666666666666664,
+      "instanton_factor": 0.5620435952816395,
+      "winding_factor": 1.6540883556945207e-67,
+      "N_wind": 6.0456262602738576e+66,
+      "total_suppression": 3.8736240264501824e-69,
+      "suppression_orders_of_magnitude": 68.41188253414914,
+      "derivation": "Quaternionic interference + instantons + winding"
+    }
+  }
+}

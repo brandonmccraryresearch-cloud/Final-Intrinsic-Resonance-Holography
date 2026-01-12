@@ -1,0 +1,242 @@
+# Agent Directive Compliance Check Workflow
+# Enforces Directive A (No-Tuning Constraint) on all pull requests
+#
+# This workflow automatically scans code for:
+# - Hardcoded experimental values without proper labeling
+# - Experimental values used as inputs (instead of validation only)
+# - Placeholder implementations without WARNING comments
+#
+# Violations will block PR merge until resolved.
+
+name: Agent Directive Compliance Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    paths:
+      - 'notebooks/**'
+      - 'scripts/**'
+      - 'verification/**'
+      - '**.py'
+      - '**.ipynb'
+  
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: 'Paths to check (space-separated)'
+        required: false
+        default: 'notebooks/ scripts/ verification/'
+
+# Minimal permissions for security
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  directive-compliance-check:
+    name: Check Directive A Compliance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          fetch-depth: 0  # Need full history for PR diff
+      
+      - name: Set up Python
+        uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236  # v4.7.1
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install nbformat
+      
+      - name: Determine paths to check
+        id: paths
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # For PRs, check changed files (excluding workflow itself, violations.json, and the checker script)
+            CHANGED_PATHS=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '\.(py|ipynb)$' | grep -v -E '(\.github/workflows/agent-directive-check\.yml|violations\.json|check_directive_compliance\.py)' || echo "")
+            if [ -z "$CHANGED_PATHS" ]; then
+              echo "No Python or notebook files changed - skipping compliance check"
+              echo "skip_check=true" >> $GITHUB_OUTPUT
+              echo "paths=." >> $GITHUB_OUTPUT  # Safe default path
+            else
+              echo "Changed files: $CHANGED_PATHS"
+              echo "skip_check=false" >> $GITHUB_OUTPUT
+              echo "paths=$(echo "$CHANGED_PATHS" | tr '\n' ' ')" >> $GITHUB_OUTPUT
+            fi
+          else
+            # For manual trigger, use input or default
+            echo "skip_check=false" >> $GITHUB_OUTPUT
+            echo "paths=${{ github.event.inputs.paths || 'notebooks/ scripts/ verification/' }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run Directive A compliance check
+        if: steps.paths.outputs.skip_check != 'true'
+        id: compliance_check
+        continue-on-error: true
+        run: |
+          python scripts/check_directive_compliance.py \
+            --check-hardcoded-values \
+            --check-experimental-labels \
+            --check-placeholder-warnings \
+            --paths ${{ steps.paths.outputs.paths }} \
+            --output violations.json
+      
+      - name: Skip check summary
+        if: steps.paths.outputs.skip_check == 'true'
+        run: |
+          echo "⏭️ Skipping compliance check - no Python or notebook files changed" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Display violations in log
+        if: always() && steps.paths.outputs.skip_check != 'true'
+        run: |
+          if [ -f violations.json ]; then
+            echo "==================== VIOLATIONS REPORT ===================="
+            echo ""
+            cat violations.json
+            echo ""
+            echo "==========================================================="
+            echo ""
+            echo "Full violations.json content displayed above for easy access."
+            echo "This file is also uploaded as an artifact for download if needed."
+          else
+            echo "No violations.json file found - compliance check completed but produced no output file"
+          fi
+      
+      - name: Upload violation report
+        if: always() && steps.paths.outputs.skip_check != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: directive-violations-report
+          path: violations.json
+          retention-days: 30
+      
+      - name: Parse violations for PR comment
+        if: failure() && github.event_name == 'pull_request' && steps.paths.outputs.skip_check != 'true'
+        id: parse_violations
+        run: |
+          if [ -f violations.json ]; then
+            python3 << 'EOF'
+          import json
+          import os
+          
+          with open('violations.json', 'r') as f:
+              data = json.load(f)
+          
+          violations = data.get('violations', [])
+          critical_count = data.get('critical_violations', 0)
+          warning_count = data.get('warning_violations', 0)
+          
+          # Format violations for GitHub comment
+          comment_body = f"""## ⚠️ Directive A Compliance Violations Detected
+          
+          **Summary:**
+          - 🚨 Critical violations: {critical_count}
+          - ⚠️  Warnings: {warning_count}
+          
+          ### Critical Issues (must be resolved):
+          
+          """
+          
+          critical_violations = [v for v in violations if v['severity'] == 'CRITICAL']
+          for i, v in enumerate(critical_violations[:15], 1):  # Limit to 15 for readability
+              file_line = f"{v['file']}:{v['line']}"
+              comment_body += f"{i}. **{file_line}**\n"
+              comment_body += f"   - **Issue:** {v['message']}\n"
+              comment_body += f"   - **Context:** {v['context']}\n"
+              comment_body += f"   - **Code:** `{v['code_snippet'][:100]}`\n\n"
+          
+          if len(critical_violations) > 15:
+              comment_body += f"\n... and {len(critical_violations) - 15} more critical violations\n\n"
+          
+          comment_body += """
+          ---
+          
+          ### Required Actions:
+          
+          1. **Derive constants from topological invariants:**
+             - Use Hopf fibration volume ratios: `Vol(S⁷) / Vol(S³)`
+             - Use 24-cell polytope symmetries
+             - Use Braid group representations (B₃ for SU(3))
+             - Use Chern numbers and characteristic classes
+          
+          2. **Label experimental values properly:**
+             ```python
+             # EXPERIMENTAL VALUE - FOR VALIDATION ONLY
+             alpha_exp = 1/137.035999084  # CODATA 2018
+             ```
+          
+          3. **Add WARNING to placeholders:**
+             ```python
+             # WARNING: PLACEHOLDER - Topological derivation pending
+             # TODO: Derive from Chern class C₂(SU(3))
+             color_factor = 3  # Temporary
+             ```
+          
+          ### Resources:
+          - See [Directive A](.github/agents/irh-computational-research.agent.md#directive-a-absolute-no-tuning-constraint) for full guidelines
+          - Review [compliance checker](scripts/check_directive_compliance.py) logic
+          - Download [detailed report](../../actions/runs/${{ github.run_id }}) from artifacts
+          
+          ---
+          
+          **This PR cannot be merged until all critical violations are resolved.**
+          """
+          
+          # Write to file for GitHub Actions
+          with open('pr_comment.txt', 'w') as f:
+              f.write(comment_body)
+          
+          print(f"Generated comment for {len(violations)} violations")
+          EOF
+          fi
+      
+      - name: Comment on PR with violations
+        if: failure() && github.event_name == 'pull_request' && steps.paths.outputs.skip_check != 'true'
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410  # v6.4.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            // Read the formatted comment
+            let body = '';
+            try {
+              body = fs.readFileSync('pr_comment.txt', 'utf8');
+            } catch (error) {
+              console.log('Could not read pr_comment.txt, using simple message');
+              body = `## ⚠️ Directive A Violations Detected
+              
+              Critical violations were found. Please check the workflow logs and download the violations report artifact for details.
+              
+              See [Directive A](.github/agents/irh-computational-research.agent.md#directive-a-absolute-no-tuning-constraint) for guidelines.`;
+            }
+            
+            // Post comment on PR
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+            
+            console.log('Posted violation comment on PR');
+      
+      - name: Fail if critical violations found
+        if: steps.compliance_check.outcome == 'failure' && steps.paths.outputs.skip_check != 'true'
+        run: |
+          echo "::error::Critical Directive A violations detected. Please resolve before merging."
+          exit 1
+      
+      - name: Success summary
+        if: success() && steps.paths.outputs.skip_check != 'true'
+        run: |
+          echo "✅ All Directive A compliance checks passed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No violations detected in checked files." >> $GITHUB_STEP_SUMMARY

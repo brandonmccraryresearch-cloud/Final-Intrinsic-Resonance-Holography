@@ -1,0 +1,259 @@
+name: IRH Theory Evolution with Gen AI
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_refinements:
+        description: 'Maximum refinements to test per cycle'
+        required: false
+        default: '5'
+        type: string
+      use_genai:
+        description: 'Use Gen AI for enhanced suggestions'
+        required: false
+        default: 'true'
+        type: boolean
+  schedule:
+    # Run weekly on Sunday at 00:00 UTC
+    - cron: '0 0 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  evolution-cycle:
+    name: Run Theory Evolution Cycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        
+      - name: Set up Python
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mpmath numpy scipy matplotlib pandas
+          pip install networkx jupyter nbconvert
+          pip install --upgrade google-genai
+          echo "✅ Dependencies installed"
+          
+      - name: Verify Gen AI SDK installation
+        env:
+          GOOGLE_CLOUD_API_KEY: ${{ secrets.GOOGLE_CLOUD_API_KEY }}
+        run: |
+          python3 -c "
+          import os
+          try:
+              from google import genai
+              print('✅ Gen AI SDK installed')
+              if os.environ.get('GOOGLE_CLOUD_API_KEY'):
+                  print('✅ API key is available')
+              else:
+                  print('⚠️  API key not set')
+          except ImportError:
+              print('❌ Gen AI SDK not available')
+          "
+          
+      - name: Run Evolution Cycle with Gen AI
+        env:
+          GOOGLE_CLOUD_API_KEY: ${{ secrets.GOOGLE_CLOUD_API_KEY }}
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import os
+          import sys
+          import json
+          from datetime import datetime
+          
+          # Add repo to path
+          sys.path.insert(0, os.getcwd())
+          
+          from evolution_system import (
+              EvolutionCycle, 
+              AIAdvisor, 
+              ErrorAnalyzer, 
+              ValidationModule,
+              CalculationEngine,
+              ExperimentalDatabase
+          )
+          
+          print("=" * 70)
+          print("IRH Theory Evolution Cycle with Gen AI")
+          print(f"Started: {datetime.now().isoformat()}")
+          print("=" * 70)
+          print()
+          
+          # Check Gen AI availability
+          advisor = AIAdvisor()
+          use_genai = "${{ inputs.use_genai }}" == "true"
+          genai_available = advisor._genai_client is not None
+          
+          print(f"Gen AI SDK requested: {use_genai}")
+          print(f"Gen AI SDK available: {genai_available}")
+          print()
+          
+          if use_genai and not genai_available:
+              print("⚠️  Gen AI requested but not available. Using templates only.")
+              print()
+          
+          # Step 1: Compute predictions
+          print("Step 1: Computing theoretical predictions...")
+          engine = CalculationEngine()
+          predictions = engine.compute_all_predictions()
+          print(f"✅ Computed {len(predictions)} predictions")
+          print()
+          
+          # Step 2: Validate
+          print("Step 2: Validating against experiments...")
+          db = ExperimentalDatabase()
+          validator = ValidationModule(db)
+          report = validator.validate_all(predictions)
+          print(f"✅ Validation complete:")
+          print(f"   Excellent: {report.excellent_count}")
+          print(f"   Good: {report.good_count}")
+          print(f"   Fair: {report.fair_count}")
+          print(f"   Poor: {report.poor_count}")
+          print()
+          
+          # Step 3: Analyze errors
+          print("Step 3: Analyzing error patterns...")
+          analyzer = ErrorAnalyzer()
+          analysis = analyzer.analyze(report)
+          print(f"✅ Found {len(analysis.patterns)} error patterns")
+          for i, pattern in enumerate(analysis.patterns[:5], 1):
+              print(f"   {i}. {pattern.severity.value}: {pattern.description[:60]}...")
+          print()
+          
+          # Step 4: Generate template suggestions
+          print("Step 4: Generating template-based suggestions...")
+          template_suggestions = advisor.get_top_suggestions(analysis.to_dict(), n=5)
+          print(f"✅ Generated {len(template_suggestions)} template suggestions")
+          for i, sugg in enumerate(template_suggestions, 1):
+              print(f"   {i}. {sugg.modification.name}")
+              print(f"      Confidence: {sugg.modification.confidence.value}")
+              print(f"      Priority: {sugg.modification.priority_score:.1f}")
+          print()
+          
+          # Step 5: Generate Gen AI suggestions (if available)
+          ai_suggestions_text = None
+          if use_genai and genai_available:
+              print("Step 5: Generating Gen AI enhanced suggestions...")
+              print("(This may take 30-60 seconds with HIGH thinking level)")
+              print()
+              
+              try:
+                  ai_suggestions_text = advisor.get_genai_suggestions(analysis.to_dict())
+                  
+                  if ai_suggestions_text:
+                      print("✅ Gen AI suggestions received")
+                      print()
+                      print("=" * 70)
+                      print("AI-ENHANCED SUGGESTIONS")
+                      print("=" * 70)
+                      print()
+                      print(ai_suggestions_text)
+                      print()
+                  else:
+                      print("⚠️  No Gen AI suggestions generated")
+                      
+              except Exception as e:
+                  print(f"⚠️  Gen AI error: {e}")
+                  print("Continuing with template suggestions only")
+          else:
+              print("Step 5: Skipping Gen AI suggestions")
+              if not use_genai:
+                  print("   (Gen AI not requested)")
+              elif not genai_available:
+                  print("   (Gen AI SDK not available)")
+          print()
+          
+          # Step 6: Export results
+          print("Step 6: Exporting results...")
+          results = {
+              "timestamp": datetime.now().isoformat(),
+              "predictions": {
+                  "total": len(predictions),
+                  "excellent": report.excellent_count,
+                  "good": report.good_count,
+                  "fair": report.fair_count,
+                  "poor": report.poor_count
+              },
+              "error_patterns": {
+                  "total": len(analysis.patterns),
+                  "patterns": [
+                      {
+                          "type": p.pattern_type.value,
+                          "severity": p.severity.value,
+                          "description": p.description
+                      } for p in analysis.patterns[:10]
+                  ]
+              },
+              "template_suggestions": {
+                  "count": len(template_suggestions),
+                  "suggestions": [
+                      {
+                          "name": s.modification.name,
+                          "confidence": s.modification.confidence.value,
+                          "priority": s.modification.priority_score
+                      } for s in template_suggestions
+                  ]
+              },
+              "genai_suggestions": {
+                  "used": use_genai and genai_available,
+                  "available": genai_available,
+                  "text": ai_suggestions_text[:500] + "..." if ai_suggestions_text and len(ai_suggestions_text) > 500 else ai_suggestions_text
+              }
+          }
+          
+          with open('evolution_cycle_results.json', 'w') as f:
+              json.dump(results, f, indent=2)
+          
+          print("✅ Results exported to evolution_cycle_results.json")
+          print()
+          
+          # Summary
+          print("=" * 70)
+          print("EVOLUTION CYCLE COMPLETE")
+          print("=" * 70)
+          print()
+          print(f"Template suggestions: {len(template_suggestions)}")
+          print(f"Gen AI used: {use_genai and genai_available}")
+          print(f"Status: SUCCESS")
+          print()
+          
+          PYTHON_SCRIPT
+          
+      - name: Upload results
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          name: evolution-cycle-results
+          path: evolution_cycle_results.json
+          retention-days: 90
+          
+      - name: Display summary
+        run: |
+          if [ -f evolution_cycle_results.json ]; then
+            echo "### Evolution Cycle Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            python3 -c "
+            import json
+            with open('evolution_cycle_results.json') as f:
+                results = json.load(f)
+            
+            print('| Metric | Value |')
+            print('|--------|-------|')
+            print(f\"| Total Predictions | {results['predictions']['total']} |\")
+            print(f\"| Excellent | {results['predictions']['excellent']} |\")
+            print(f\"| Good | {results['predictions']['good']} |\")
+            print(f\"| Fair | {results['predictions']['fair']} |\")
+            print(f\"| Poor | {results['predictions']['poor']} |\")
+            print(f\"| Error Patterns | {results['error_patterns']['total']} |\")
+            print(f\"| Template Suggestions | {results['template_suggestions']['count']} |\")
+            print(f\"| Gen AI Used | {results['genai_suggestions']['used']} |\")
+            " >> $GITHUB_STEP_SUMMARY
+          fi

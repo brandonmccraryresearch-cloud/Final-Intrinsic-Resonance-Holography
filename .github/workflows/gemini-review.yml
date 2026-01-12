@@ -1,0 +1,291 @@
+# Gemini AI Code Review Workflow
+# Uses Google's Gemini 1.5 Pro (model 'gemini-1.5-pro') for intelligent code review focused on
+# IRH directive compliance with actionable derivation suggestions
+#
+# This is a reusable workflow that can be called from other workflows
+# to perform AI-guided review before session completion.
+
+name: Gemini AI Code Review
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'Pull request number to review'
+        required: true
+        type: number
+      session_id:
+        description: 'Agent session ID (for tracking)'
+        required: true
+        type: string
+      focus_areas:
+        description: 'Comma-separated focus areas'
+        required: false
+        type: string
+        default: 'hardcoded values,experimental inputs,placeholder implementations'
+    outputs:
+      has_critical:
+        description: 'Whether critical issues were found'
+        value: ${{ jobs.gemini-review.outputs.has_critical }}
+      issue_count:
+        description: 'Total number of issues found'
+        value: ${{ jobs.gemini-review.outputs.issue_count }}
+  
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull request number to review'
+        required: true
+        type: number
+      session_id:
+        description: 'Agent session ID (for tracking)'
+        required: false
+        type: string
+        default: 'manual'
+      focus_areas:
+        description: 'Comma-separated focus areas'
+        required: false
+        type: string
+        default: 'hardcoded values,experimental inputs,placeholder implementations'
+
+# Minimal permissions for security
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gemini-review:
+    name: AI-Powered Directive Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      has_critical: ${{ steps.review.outputs.has_critical }}
+      issue_count: ${{ steps.review.outputs.issue_count }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          fetch-depth: 0  # Need full history for PR diff
+      
+      - name: Set up Python
+        uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236  # v4.7.1
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install Gemini SDK if API key is available
+          if [ -n "${{ secrets.GEMINI_API_KEY }}" ]; then
+            pip install google-generativeai
+            echo "Gemini SDK installed"
+          else
+            echo "⚠️  Gemini API key not available, will use rule-based fallback"
+          fi
+      
+      - name: Run Gemini code review
+        id: review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python scripts/gemini_review.py \
+            --pr-number ${{ inputs.pr_number }} \
+            --directives .github/agents/irh-computational-research.agent.md \
+            --focus-areas "${{ inputs.focus_areas }}" \
+            --output review_results.json
+          
+          # Extract outputs for downstream steps
+          if [ -f review_results.json ]; then
+            HAS_CRITICAL=$(jq -r '.has_critical' review_results.json)
+            ISSUE_COUNT=$(jq -r '.total_issues' review_results.json)
+            echo "has_critical=$HAS_CRITICAL" >> $GITHUB_OUTPUT
+            echo "issue_count=$ISSUE_COUNT" >> $GITHUB_OUTPUT
+            
+            echo "Review complete: $ISSUE_COUNT issues, critical=$HAS_CRITICAL"
+          else
+            echo "has_critical=false" >> $GITHUB_OUTPUT
+            echo "issue_count=0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload review results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: gemini-review-results-pr-${{ inputs.pr_number }}
+          path: review_results.json
+          retention-days: 30
+      
+      - name: Format review comments for PR
+        if: steps.review.outputs.issue_count != '0'
+        id: format_comments
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          
+          with open('review_results.json', 'r') as f:
+              results = json.load(f)
+          
+          issues = results.get('issues', [])
+          
+          # Format for PR comments
+          comment_body = f"""## 🤖 Gemini AI Code Review Results
+          
+          **Session ID:** `${{ inputs.session_id }}`
+          
+          **Summary:**
+          - Total issues: {results.get('total_issues', 0)}
+          - 🚨 Critical: {results.get('critical_count', 0)}
+          - ⚠️  Warnings: {results.get('warning_count', 0)}
+          
+          """
+          
+          # Group by severity
+          critical_issues = [i for i in issues if i.get('severity') == 'CRITICAL']
+          warning_issues = [i for i in issues if i.get('severity') == 'WARNING']
+          
+          if critical_issues:
+              comment_body += "\n### 🚨 Critical Issues (Must Fix):\n\n"
+              for i, issue in enumerate(critical_issues[:10], 1):
+                  file_line = f"{issue.get('file', 'Unknown')}:{issue.get('line', 0)}"
+                  comment_body += f"{i}. **{file_line}**\n"
+                  comment_body += f"   - **Issue:** {issue.get('message', 'No message')}\n"
+                  comment_body += f"   - **Type:** `{issue.get('violation_type', 'UNKNOWN')}`\n"
+                  comment_body += f"   - **Fix:** {issue.get('fix_required', 'No fix suggested')}\n"
+                  
+                  if issue.get('suggested_code'):
+                      comment_body += f"\n   **Suggested code:**\n   ```python\n   {issue['suggested_code']}\n   ```\n"
+                  comment_body += "\n"
+              
+              if len(critical_issues) > 10:
+                  comment_body += f"\n_... and {len(critical_issues) - 10} more critical issues_\n"
+          
+          if warning_issues:
+              comment_body += "\n### ⚠️  Warnings (Should Fix):\n\n"
+              for i, issue in enumerate(warning_issues[:5], 1):
+                  file_line = f"{issue.get('file', 'Unknown')}:{issue.get('line', 0)}"
+                  comment_body += f"{i}. **{file_line}**: {issue.get('message', 'No message')}\n"
+              
+              if len(warning_issues) > 5:
+                  comment_body += f"\n_... and {len(warning_issues) - 5} more warnings_\n"
+          
+          comment_body += """
+          ---
+          
+          ### 📚 Resources:
+          - [Directive A](.github/agents/irh-computational-research.agent.md#directive-a-absolute-no-tuning-constraint)
+          - [Directive B](.github/agents/irh-computational-research.agent.md#directive-b-codata-precision-requirement)
+          - [Directive C](.github/agents/irh-computational-research.agent.md#directive-c-rigorous-formalism-enforcement)
+          
+          **Note:** This review prioritizes suggesting derivation paths over pragmatic workarounds.
+          All constants should be derived from topological invariants (Hopf fibration, Chern classes, etc.)
+          """
+          
+          with open('pr_comment.txt', 'w') as f:
+              f.write(comment_body)
+          
+          print(f"Formatted comment with {len(issues)} issues")
+          EOF
+      
+      - name: Post review comments on PR
+        if: steps.review.outputs.issue_count != '0'
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410  # v6.4.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            // Read formatted comment
+            let body = '';
+            try {
+              body = fs.readFileSync('pr_comment.txt', 'utf8');
+            } catch (error) {
+              console.log('Could not read pr_comment.txt, using simple message');
+              body = `## 🤖 Gemini AI Code Review
+              
+              Issues detected. Please check the workflow logs for details.
+              Download the review results artifact for complete analysis.`;
+            }
+            
+            // Post as PR comment
+            await github.rest.issues.createComment({
+              issue_number: ${{ inputs.pr_number }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+            
+            console.log('Posted Gemini review comment on PR');
+      
+      - name: Create review comments for critical issues
+        if: steps.review.outputs.has_critical == 'true'
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410  # v6.4.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            // Read review results
+            const results = JSON.parse(fs.readFileSync('review_results.json', 'utf8'));
+            
+            // Filter critical issues
+            const criticalIssues = results.issues.filter(i => i.severity === 'CRITICAL');
+            
+            // Create inline review comments for critical issues
+            for (const issue of criticalIssues.slice(0, 20)) {  // Limit to 20 to avoid API limits
+              if (issue.file && issue.line) {
+                try {
+                  // Get the latest commit SHA
+                  const { data: pr } = await github.rest.pulls.get({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: ${{ inputs.pr_number }}
+                  });
+                  
+                  const body = "🚨 **" + issue.message + "**\n\n" +
+                    "**Required fix:** " + issue.fix_required + "\n\n" +
+                    (issue.suggested_code ? "**Suggested code:**\n```python\n" + issue.suggested_code + "\n```\n\n" : "") +
+                    "_This is an automated review by Gemini AI_";
+                  
+                  await github.rest.pulls.createReviewComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: ${{ inputs.pr_number }},
+                    body: body,
+                    commit_id: pr.head.sha,
+                    path: issue.file,
+                    line: issue.line
+                  });
+                  
+                  console.log(`Posted review comment on ${issue.file}:${issue.line}`);
+                } catch (error) {
+                  console.log(`Could not post comment on ${issue.file}:${issue.line}: ${error.message}`);
+                }
+              }
+            }
+            
+            console.log(`Posted ${criticalIssues.length} critical issue comments`);
+      
+      - name: Block merge if critical issues found
+        if: steps.review.outputs.has_critical == 'true'
+        run: |
+          echo "::error::Critical directive violations detected by Gemini AI review"
+          echo "::error::All critical issues must be resolved before merging"
+          echo ""
+          echo "Review the suggested fixes and derive constants from topological invariants."
+          echo "See review_results.json artifact for complete analysis."
+          exit 1
+      
+      - name: Success summary
+        if: steps.review.outputs.has_critical != 'true'
+        run: |
+          echo "✅ Gemini AI review complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.review.outputs.issue_count }}" = "0" ]; then
+            echo "No issues detected. Excellent work! 🎉" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Found ${{ steps.review.outputs.issue_count }} non-critical issues." >> $GITHUB_STEP_SUMMARY
+            echo "Consider addressing warnings before merging." >> $GITHUB_STEP_SUMMARY
+          fi

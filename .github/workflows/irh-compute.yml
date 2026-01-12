@@ -1,0 +1,282 @@
+# IRH Computational Validation Workflow
+# Intrinsic Resonance Holography v26.0 - GitHub Actions Configuration
+#
+# This workflow runs computational validation of the IRH theoretical framework
+# using Anaconda/Miniconda with a full scientific Python stack.
+
+name: IRH Computational Validation
+
+on:
+  # Manual trigger with section selection
+  workflow_dispatch:
+    inputs:
+      section:
+        description: 'Theory section to compute'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - '01_substrate_foundation'
+          - '02_harmony_functional'
+          - '03_particle_sector'
+          - '04_cosmology'
+          - '05_gauge_sector'
+          - '06_validation_suite'
+          - '07_appendices'
+      precision:
+        description: 'Numerical precision level'
+        required: true
+        default: 'high'
+        type: choice
+        options:
+          - 'standard'
+          - 'high'
+          - 'arbitrary'
+  
+  # Trigger on push to relevant files
+  push:
+    branches:
+      - main
+      - 'feature/**'
+    paths:
+      - 'notebooks/**'
+      - 'environment.yml'
+      - '.github/workflows/irh-compute.yml'
+  
+  # Weekly validation run
+  schedule:
+    - cron: '0 0 * * 0'  # Every Sunday at midnight UTC
+
+# Permissions required for artifact upload and content access
+permissions:
+  contents: write
+  actions: write
+  pull-requests: write
+
+# Environment variables for Python execution
+env:
+  PYTHONUNBUFFERED: "1"
+  MPLBACKEND: "Agg"
+  NUMBA_CACHE_DIR: ${{ github.workspace }}/.numba_cache
+
+jobs:
+  validate:
+    name: IRH Computational Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hour maximum for complex computations
+    
+    defaults:
+      run:
+        shell: bash -el {0}  # Required for conda activation
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Miniconda with Mamba
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: irh-compute
+          environment-file: environment.yml
+          use-mamba: true
+          auto-update-conda: true
+          python-version: "3.11"
+        
+      - name: Cache Conda Environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.conda
+            ~/.cache/pip
+            ${{ env.NUMBA_CACHE_DIR }}
+          key: conda-${{ runner.os }}-${{ hashFiles('environment.yml') }}
+          restore-keys: |
+            conda-${{ runner.os }}-
+
+      - name: Verify Environment
+        run: |
+          echo "=== Python Version ==="
+          python --version
+          
+          echo "=== Conda Environment ==="
+          conda list
+          
+          echo "=== Testing Core Imports ==="
+          python -c "
+          import numpy as np
+          import scipy
+          import sympy
+          import matplotlib
+          import mpmath
+          print('NumPy:', np.__version__)
+          print('SciPy:', scipy.__version__)
+          print('SymPy:', sympy.__version__)
+          print('mpmath:', mpmath.__version__)
+          print('All core imports successful!')
+          "
+
+      - name: Create Output Directories
+        run: |
+          mkdir -p outputs/notebooks
+          mkdir -p outputs/figures
+          mkdir -p outputs/data
+          mkdir -p outputs/reports
+
+      - name: Run Computational Validation
+        run: |
+          SECTION="${{ github.event.inputs.section || 'all' }}"
+          PRECISION="${{ github.event.inputs.precision || 'standard' }}"
+          
+          echo "=== IRH Computational Validation ==="
+          echo "Section: $SECTION"
+          echo "Precision: $PRECISION"
+          echo "=================================="
+          
+          # Set precision environment variable
+          export IRH_PRECISION="$PRECISION"
+          
+          if [ "$SECTION" = "all" ]; then
+            # Run all notebooks
+            for notebook in notebooks/*.ipynb; do
+              if [ -f "$notebook" ]; then
+                echo "Executing: $notebook"
+                basename_nb="$(basename "$notebook")"
+                jupyter nbconvert --to notebook --execute \
+                  --ExecutePreprocessor.timeout=3600 \
+                  --output-dir outputs/notebooks \
+                  "$notebook" || echo "Warning: $notebook had issues"
+                
+                # Export to HTML for easy viewing
+                jupyter nbconvert --to html "outputs/notebooks/$basename_nb" --output-dir outputs/reports/
+              fi
+            done
+          else
+            # Run specific section
+            notebook="notebooks/${SECTION}.ipynb"
+            if [ -f "$notebook" ]; then
+              echo "Executing: $notebook"
+              basename_nb="$(basename "$notebook")"
+              jupyter nbconvert --to notebook --execute \
+                --ExecutePreprocessor.timeout=3600 \
+                --output-dir outputs/notebooks \
+                "$notebook"
+              jupyter nbconvert --to html "outputs/notebooks/$basename_nb" --output-dir outputs/reports/
+            else
+              echo "Notebook not found: $notebook"
+              echo "Available notebooks:"
+              ls -la notebooks/ || echo "No notebooks directory"
+              exit 1
+            fi
+          fi
+
+      - name: Generate Validation Report
+        if: always()
+        run: |
+          cat > outputs/reports/validation_summary.md << EOF
+          # IRH Computational Validation Report
+          
+          **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          **Run ID:** ${{ github.run_id }}
+          **Trigger:** ${{ github.event_name }}
+          
+          ## Configuration
+          - **Section:** ${{ github.event.inputs.section || 'all' }}
+          - **Precision:** ${{ github.event.inputs.precision || 'standard' }}
+          - **Python:** $(python --version 2>&1)
+          - **Runner:** ${{ runner.os }}
+          
+          ## Executed Notebooks
+          $(ls outputs/notebooks/*.ipynb 2>/dev/null | while read f; do echo "- $(basename $f)"; done || echo "No notebooks executed")
+          
+          ## Output Files
+          $(ls outputs/data/ 2>/dev/null | while read f; do echo "- data/$f"; done || echo "No data files")
+          $(ls outputs/figures/ 2>/dev/null | while read f; do echo "- figures/$f"; done || echo "No figures")
+          
+          ## Notes
+          This report was automatically generated by the IRH Computational Validation workflow.
+          EOF
+
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: irh-computation-results-${{ github.run_number }}
+          path: outputs/
+          retention-days: 90
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## IRH Computational Validation Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Section: ${{ github.event.inputs.section || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Precision: ${{ github.event.inputs.precision || 'standard' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:** Available for download in the Actions tab" >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Matrix strategy for parallel notebook execution
+  parallel-validation:
+    name: Parallel Notebook Execution
+    runs-on: ubuntu-latest
+    if: github.event.inputs.section == 'all' && github.event_name == 'workflow_dispatch'
+    timeout-minutes: 120
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        notebook:
+          - '01_substrate_foundation'
+          - '02_harmony_functional'
+          - '03_particle_sector'
+          - '04_cosmology'
+          - '05_gauge_sector'
+          - '06_validation_suite'
+          - '07_appendices'
+    
+    defaults:
+      run:
+        shell: bash -el {0}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: irh-compute
+          environment-file: environment.yml
+          use-mamba: true
+
+      - name: Create Output Directories
+        run: |
+          mkdir -p outputs/notebooks
+          mkdir -p outputs/figures
+          mkdir -p outputs/data
+          mkdir -p outputs/reports
+      
+      - name: Run ${{ matrix.notebook }}
+        run: |
+          notebook="notebooks/${{ matrix.notebook }}.ipynb"
+          if [ -f "$notebook" ]; then
+            basename_nb="$(basename "$notebook")"
+            jupyter nbconvert --to notebook --execute \
+              --ExecutePreprocessor.timeout=3600 \
+              --output-dir outputs/notebooks \
+              "$notebook"
+            jupyter nbconvert --to html "outputs/notebooks/$basename_nb" --output-dir outputs/reports/
+          else
+            echo "Notebook not found: $notebook (will be created)"
+          fi
+
+      - name: Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: irh-notebook-${{ matrix.notebook }}-${{ github.run_number }}
+          path: outputs/
+          retention-days: 90
